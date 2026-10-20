@@ -257,6 +257,84 @@ internal static class ReaderTests
                     form.Close();
                 }
             });
+            Run("streaming reader handles reordered fields, escapes and skipped nested data", delegate
+            {
+                string d = Folder();
+                string line = "{\"payload\":{\"ignored\":{\"nested\":[1,true,null,{\"text\":\"汉字\\n\\u6708\"}]},\"rate_limits\":{\"secondary\":{\"used_percent\":2.5e1},\"primary\":{\"used_percent\":1.25e1},\"plan_type\":\"pl\\u0075s\",\"limit_id\":\"codex\"},\"type\":\"token_count\"},\"type\":\"event_msg\",\"timestamp\":\"" + Now.ToString("o") + "\"}";
+                Put(d, "a", line); UsageSnapshot s = Read(d); Equal(s.Primary.RemainingPercent, 87.5); Equal(s.Secondary.RemainingPercent, 75); Check(s.Plan == "plus");
+            });
+            Run("streaming reader rejects trailing or incomplete JSON atomically", delegate
+            {
+                string d = Folder(); string valid = Event(Now, W(1), W(2));
+                Put(d, "a", valid + "garbage\n" + valid.Substring(0, valid.Length - 1)); Check(!Read(d).HasData);
+            });
+            Run("streaming reader honors last duplicate member", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(5), W(6)).Replace("\"used_percent\":5", "\"used_percent\":99,\"used_percent\":5")); Equal(Read(d).Primary.RemainingPercent, 95);
+            });
+            Run("oversized log lines cannot pin a large resident buffer", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(12), W(13)) + "\n" + new string('x', 6 * 1024 * 1024));
+                UsageReader reader = new UsageReader(); Equal(reader.Load(d, true).Primary.RemainingPercent, 88); Check(reader.BufferCapacity <= 2 * UsageReader.BlockSize);
+            });
+            Run("legacy settings and defaults remain compatible without touching user files", delegate
+            {
+                string legacy = "{\"SessionRoot\":\"C:\\\\Codex\\\\sessions\",\"RefreshSeconds\":45,\"ShowNumberIcon\":false,\"LightTheme\":true,\"ResolvedRoot\":\"ignored\"}";
+                Settings s;
+                using (MemoryStream stream = new MemoryStream(Encoding.UTF8.GetBytes(legacy))) s = JsonData.Read<Settings>(stream);
+                Check(s.RefreshSeconds == 45 && !s.ShowNumberIcon && s.LightTheme && s.SessionRoot != null);
+                using (MemoryStream stream = new MemoryStream(JsonData.Encode(s)))
+                { Settings copy = JsonData.Read<Settings>(stream); Check(copy.SessionRoot == s.SessionRoot && copy.RefreshSeconds == 45 && !copy.ShowNumberIcon && copy.LightTheme); }
+                using (MemoryStream stream = new MemoryStream(Encoding.UTF8.GetBytes("{}")))
+                { Settings defaults = JsonData.Read<Settings>(stream); Check(defaults.RefreshSeconds == 30 && defaults.ShowNumberIcon); }
+            });
+            Run("diagnostic JSON retains the existing field names and values", delegate
+            {
+                UsageSnapshot s = Preview.Demo();
+                System.Collections.Generic.Dictionary<string, object> parsed = (System.Collections.Generic.Dictionary<string, object>)Json.DeserializeObject(CodexQuota.Program.Report(s));
+                Check((bool)parsed["has_data"] && parsed.ContainsKey("recorded_at") && parsed.ContainsKey("unreadable_files"));
+                System.Collections.Generic.Dictionary<string, object> w = (System.Collections.Generic.Dictionary<string, object>)parsed["primary"];
+                Equal(Convert.ToDouble(w["remaining_percent"]), 76); Check(w.ContainsKey("reset_estimated") && w.ContainsKey("reset_time_passed"));
+                Check(!typeof(UsageReader).Assembly.GetReferencedAssemblies().Any(a => a.Name == "System.Web.Extensions"));
+            });
+            Run("unchanged tray images are reused and freshness does not grow the cache", delegate
+            {
+                using (TrayIconCache cache = new TrayIconCache())
+                {
+                    UsageSnapshot s = Preview.Demo(); cache.Update(s, false, true); Icon ring = cache.Ring, number = cache.Number;
+                    for (int i = 0; i < 2000; i++) { s.Primary.RecordedAt = DateTimeOffset.Now; cache.Update(s, false, true); }
+                    Check(cache.RenderCount == 2 && Object.ReferenceEquals(ring, cache.Ring) && Object.ReferenceEquals(number, cache.Number));
+                    s.Secondary.UsedPercent = 39; cache.Update(s, false, true); Check(cache.RenderCount == 2);
+                    s.Secondary.UsedPercent = 20; cache.Update(s, false, true); Check(cache.RenderCount == 3 && !cache.NumberChanged);
+                    cache.Update(s, false, false); Check(cache.Number == null && cache.RenderCount == 3);
+                    cache.Update(s, false, true); Check(cache.RenderCount == 4);
+                    s.Primary.ResetsAt = DateTimeOffset.Now.AddSeconds(-1); cache.Update(s, false, true); Check(cache.RenderCount == 6);
+                }
+            });
+            Run("hidden detail windows release their full-size paint buffer", delegate
+            {
+                using (QuotaForm form = new QuotaForm(new Settings()))
+                {
+                    form.Snapshot = Preview.Demo(); form.TopMost = false; form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-32000, -32000);
+                    form.Show(); Application.DoEvents(); form.Refresh(); Check(form.BufferedBytes > 0);
+                    form.Hide(); Check(form.BufferedBytes == 0);
+                    form.Show(); Application.DoEvents(); form.Refresh(); Check(form.BufferedBytes > 0);
+                    form.AllowClose = true; form.Close(); Check(form.BufferedBytes == 0);
+                }
+            });
+            Run("background tray starts without constructing the detail window", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(1), W(2)));
+                using (TrayContext context = new TrayContext(false, d))
+                {
+                    Stopwatch watch = Stopwatch.StartNew();
+                    while (context.Snapshot == null && watch.ElapsedMilliseconds < 3000) { Application.DoEvents(); System.Threading.Thread.Sleep(1); }
+                    Check(context.Snapshot != null && context.Snapshot.HasData && !context.HasPanel);
+                    int count = context.IconRenderCount;
+                    Application.DoEvents(); Check(context.IconRenderCount == count);
+                    context.Shutdown();
+                }
+            });
             Console.WriteLine("RESULT: " + passed + " passed, " + failed + " failed");
             return failed == 0 ? 0 : 1;
         }

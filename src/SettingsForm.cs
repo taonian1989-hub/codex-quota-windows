@@ -12,6 +12,7 @@ namespace CodexQuota
         private readonly CheckBox number, light, startup;
         private readonly Settings settings;
         private readonly float uiScale;
+        private readonly Font uiFont;
         private static readonly int[] RefreshChoices = { 10, 15, 30, 60, 120, 300, 600, 1800, 3600 };
 
         public SettingsForm(Settings current) : this(current, 0) { }
@@ -24,7 +25,7 @@ namespace CodexQuota
             using (Graphics g = CreateGraphics()) uiScale = scaleOverride > 0 ? scaleOverride : g.DpiX / 96f;
             SuspendLayout();
             AutoScaleMode = AutoScaleMode.None;
-            Font = new Font("Microsoft YaHei UI", 12 * uiScale, FontStyle.Regular, GraphicsUnit.Pixel);
+            uiFont = new Font("Microsoft YaHei UI", 12 * uiScale, FontStyle.Regular, GraphicsUnit.Pixel); Font = uiFont;
             Text = "Codex Quota 设置";
             StartPosition = FormStartPosition.CenterParent;
             FormBorderStyle = FormBorderStyle.Sizable;
@@ -87,6 +88,8 @@ namespace CodexQuota
             AcceptButton = save; CancelButton = cancel;
             ResumeLayout(true);
         }
+        protected override void Dispose(bool disposing)
+        { base.Dispose(disposing); if (disposing && uiFont != null) uiFont.Dispose(); }
         private int Px(float value) { return (int)Math.Round(value * uiScale); }
         private Padding Gap(int left, int top, int right, int bottom) { return new Padding(Px(left), Px(top), Px(right), Px(bottom)); }
         private Button MakeButton(string text, string name)

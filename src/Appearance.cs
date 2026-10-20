@@ -12,6 +12,8 @@ namespace CodexQuota
         public static readonly Color Amber = Color.FromArgb(255, 184, 84);
         public static readonly Color Red = Color.FromArgb(250, 112, 123);
         public static readonly Color Moon = Color.FromArgb(255, 184, 84);
+        private static readonly double[] MoonThresholds = { 20, 35, 45, 55, 70, 90 };
+        private static readonly double[] MoonCoefficients = { 0.78, 0.588, 0.309, 0, -0.309, -0.809, -1 };
         public static Color Status(double remaining) { return remaining > 40 ? Green : remaining > 15 ? Amber : Red; }
         public static string Percent(double value) { return value.ToString("0", System.Globalization.CultureInfo.InvariantCulture) + "%"; }
         public static string Age(DateTimeOffset time)
@@ -33,8 +35,8 @@ namespace CodexQuota
         }
         public static int MoonLevel(double remaining)
         {
-            double[] thresholds = { 20, 35, 45, 55, 70, 90 };
-            for (int i = 0; i < thresholds.Length; i++) if (remaining < thresholds[i]) return i;
+
+            for (int i = 0; i < MoonThresholds.Length; i++) if (remaining < MoonThresholds[i]) return i;
             return 6;
         }
         public static GraphicsPath Rounded(RectangleF r, float radius)
@@ -57,8 +59,8 @@ namespace CodexQuota
             if (!remaining.HasValue) return;
             using (Brush dark = new SolidBrush(Color.FromArgb(105, 115, 126))) g.FillEllipse(dark, r);
             if (remaining <= 0) return;
-            double[] coefficients = { 0.78, 0.588, 0.309, 0, -0.309, -0.809, -1 };
-            double k = coefficients[MoonLevel(remaining.Value)];
+
+            double k = MoonCoefficients[MoonLevel(remaining.Value)];
             float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2, rx = r.Width / 2, ry = r.Height / 2;
             PointF[] points = new PointF[130];
             for (int i = 0; i <= 64; i++)

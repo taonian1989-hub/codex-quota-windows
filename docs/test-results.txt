@@ -35,4 +35,13 @@ PASS settings layout fits and interval is selectable at 150%
 PASS settings layout fits and interval is selectable at 200%
 PASS invalid interval blocks saving without modifying settings
 PASS custom interval and cancel preserve existing settings
-RESULT: 36 passed, 0 failed
+PASS streaming reader handles reordered fields, escapes and skipped nested data
+PASS streaming reader rejects trailing or incomplete JSON atomically
+PASS streaming reader honors last duplicate member
+PASS oversized log lines cannot pin a large resident buffer
+PASS legacy settings and defaults remain compatible without touching user files
+PASS diagnostic JSON retains the existing field names and values
+PASS unchanged tray images are reused and freshness does not grow the cache
+PASS hidden detail windows release their full-size paint buffer
+PASS background tray starts without constructing the detail window
+RESULT: 45 passed, 0 failed

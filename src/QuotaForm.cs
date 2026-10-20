@@ -14,6 +14,10 @@ namespace CodexQuota
         public string Notice;
         private readonly Settings settings;
         private readonly float scale;
+        private readonly Font buttonFont;
+        private BufferedGraphicsContext renderContext;
+        private BufferedGraphics renderBuffer;
+        internal long BufferedBytes { get { return renderBuffer == null ? 0 : (long)ClientSize.Width * ClientSize.Height * 4; } }
         private readonly Button refresh, options, folder;
         public event Action RefreshRequested, SettingsRequested, FolderRequested;
         public Color Surface { get { return settings.LightTheme ? Color.FromArgb(245, 247, 249) : Color.FromArgb(18, 23, 29); } }
@@ -31,7 +35,9 @@ namespace CodexQuota
             StartPosition = FormStartPosition.Manual;
             Text = "Codex Quota · 额度监视器"; AccessibleName = Text;
             ShowInTaskbar = false; MaximizeBox = false; MinimizeBox = false;
-            TopMost = true; DoubleBuffered = true; KeyPreview = true;
+            TopMost = true; DoubleBuffered = false; KeyPreview = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            buttonFont = new Font("Microsoft YaHei UI", 12 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
             BackColor = Surface;
             refresh = AddButton("立即刷新", 24, 600, 190, delegate { if (RefreshRequested != null) RefreshRequested(); }, true);
             options = AddButton("设置", 226, 600, 90, delegate { if (SettingsRequested != null) SettingsRequested(); }, false);
@@ -46,7 +52,7 @@ namespace CodexQuota
         private Button AddButton(string text, int x, int y, int w, Action action, bool accent)
         {
             Button b = new Button { Text = text, Location = new Point((int)(x * scale), (int)(y * scale)), Size = new Size((int)(w * scale), (int)((y == 16 ? 29 : 40) * scale)), FlatStyle = FlatStyle.Flat, Cursor = Cursors.Hand, TabStop = true, AccessibleName = text };
-            b.Font = new Font("Microsoft YaHei UI", 12 * scale, FontStyle.Regular, GraphicsUnit.Pixel);
+            b.Font = buttonFont;
             b.FlatAppearance.BorderSize = 0; b.FlatAppearance.MouseOverBackColor = accent ? Color.FromArgb(123, 232, 191) : Color.FromArgb(60, 74, 86);
             b.BackColor = accent ? Appearance.Green : Card;
             b.ForeColor = accent ? Color.FromArgb(18, 45, 34) : Foreground;
@@ -64,6 +70,23 @@ namespace CodexQuota
             AccessibleDescription = Snapshot == null ? "正在读取本地额度" : "5 小时剩余 " + (Snapshot.Primary == null ? "未知" : Appearance.Percent(Snapshot.Primary.RemainingPercent)) + "，每周剩余 " + (Snapshot.Secondary == null ? "未知" : Appearance.Percent(Snapshot.Secondary.RemainingPercent));
             Invalidate();
         }
+        private void ReleaseRenderBuffer()
+        {
+            if (renderBuffer != null) { renderBuffer.Dispose(); renderBuffer = null; }
+            if (renderContext != null) { renderContext.Dispose(); renderContext = null; }
+        }
+        protected override void OnVisibleChanged(EventArgs e)
+        {
+            base.OnVisibleChanged(e);
+            if (Visible) UpdateView(); else ReleaseRenderBuffer();
+        }
+        protected override void OnPaintBackground(PaintEventArgs e) { }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) ReleaseRenderBuffer();
+            base.Dispose(disposing);
+            if (disposing && buttonFont != null) buttonFont.Dispose();
+        }
         protected override void OnFormClosing(FormClosingEventArgs e)
         { if (!AllowClose && e.CloseReason == CloseReason.UserClosing) { e.Cancel = true; Hide(); } base.OnFormClosing(e); }
         public void ShowNearTray()
@@ -75,7 +98,14 @@ namespace CodexQuota
         protected override void OnPaint(PaintEventArgs e)
         {
             base.OnPaint(e);
-            Graphics g = e.Graphics; g.ScaleTransform(scale, scale); g.SmoothingMode = SmoothingMode.AntiAlias;
+            if (renderBuffer == null)
+            {
+                renderContext = new BufferedGraphicsContext();
+                renderContext.MaximumBuffer = new Size(ClientSize.Width + 1, ClientSize.Height + 1);
+                renderBuffer = renderContext.Allocate(e.Graphics, ClientRectangle);
+            }
+            Graphics g = renderBuffer.Graphics; g.ResetTransform(); g.Clear(Surface);
+            g.ScaleTransform(scale, scale); g.SmoothingMode = SmoothingMode.AntiAlias;
             g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
             using (Pen border = new Pen(settings.LightTheme ? Color.FromArgb(211, 219, 226) : Color.FromArgb(53, 65, 77))) g.DrawRectangle(border, 0, 0, 439, 699);
             UsageWindow p = Snapshot == null ? null : Snapshot.Primary, s = Snapshot == null ? null : Snapshot.Secondary;
@@ -111,7 +141,8 @@ namespace CodexQuota
             if (String.IsNullOrEmpty(notice) && Snapshot != null && Snapshot.UnreadableFiles > 0) notice = "有 " + Snapshot.UnreadableFiles + " 个目录或日志无法读取，结果可能不完整。";
             if (String.IsNullOrEmpty(notice) && Snapshot != null && Snapshot.LimitedFiles > 0) notice = "部分日志超过 64 MB 扫描范围，结果可能不完整。";
             Appearance.Text(g, String.IsNullOrEmpty(notice) ? "只读本机日志  ·  无网络请求  ·  无需 API Key" : notice, 25, 656, 10, Muted, false);
-            Appearance.Text(g, "外圈  5 小时     /     月相  每周     ·     v1.0.1", 25, 677, 9, Muted, false);
+            Appearance.Text(g, "外圈  5 小时     /     月相  每周     ·     v1.0.2", 25, 677, 9, Muted, false);
+            g.ResetTransform(); renderBuffer.Render(e.Graphics);
         }
         private void DrawCard(Graphics g, UsageWindow w, UsageWindow weekly, int y, bool primary)
         {

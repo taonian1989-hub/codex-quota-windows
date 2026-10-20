@@ -6,12 +6,12 @@ Windows 10 / 11 通知区域中的 Codex 额度监视器。**免安装、运行�
 
 <p align="center"><img src="docs/panel-dark.png" width="440" alt="Codex Quota 深色详情面板，示例数据"></p>
 
-当前版本：**v1.0.1**。参考 [Phil520/CodexO](https://github.com/Phil520/CodexO) 的功能，为 Windows 用 C# + Windows Forms 重新实现。保留原项目 MIT 声明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目是社区工具。
+当前版本：**v1.0.2**。参考 [Phil520/CodexO](https://github.com/Phil520/CodexO) 的功能，为 Windows 用 C# + Windows Forms 重新实现。保留原项目 MIT 声明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目是社区工具。
 
 ## 下载与启动
 
 1. 打开 [Releases](https://github.com/taonian1989-hub/codex-quota-windows/releases/latest)。
-2. 下载 **CodexQuota-1.0.1-windows.zip**，解压到任意文件夹。
+2. 下载 **CodexQuota-1.0.2-windows.zip**，解压到任意文件夹。
 3. 双击 **CodexQuota.exe**。不需要管理员权限。
 
 系统要求：Windows 10 / 11，.NET Framework 4.8。程序没有第三方运行依赖；如系统缺少 .NET Framework 4.8，需先安装该运行环境。
@@ -21,7 +21,7 @@ Windows 可能把新图标放进任务栏的「^」隐藏区域，可手动拖�
 发布资产包含 SHA256SUMS.txt，可用以下命令核对下载文件：
 
 ```powershell
-Get-FileHash .\CodexQuota-1.0.1-windows.zip -Algorithm SHA256
+Get-FileHash .\CodexQuota-1.0.2-windows.zip -Algorithm SHA256
 ```
 
 ## 设置窗口
@@ -68,6 +68,14 @@ Get-FileHash .\CodexQuota-1.0.1-windows.zip -Algorithm SHA256
 
 卸载时先在设置中关闭已启用的登录自启，然后退出程序并删除解压目录。可选删除 `%LOCALAPPDATA%\CodexQuota`。
 
+## 性能优化（v1.0.2）
+
+在同机、同一实际会话目录的 30 秒加速刷新对照中，私有工作集从 44.0 MiB 降至 15.8 MiB。32 份固定日志做 100 次强制扫描时，累计托管分配从 2230.9 MiB 降至 15.9 MiB，耗时从 1965 ms 降至 1047 ms。
+
+优化包含复用读取缓冲、字节预筛与流式 JSON、未变化的图标复用、详情按需创建、隐藏时释放绘图缓冲，以及 32 位优先 CLR 构建。程序不做强制 GC 或工作集裁剪，刷新间隔、功能和操作不变。
+
+内存会随日志与窗口状态波动，以上是本次测量，不是所有机器的固定上限。方法、原始指标与边界见 [性能审查](docs/performance.md)。
+
 ## 从源码构建
 
 使用系统的 .NET Framework C# 编译器，不依赖 NuGet 或 .NET SDK，不需要网络：
@@ -77,7 +85,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -OutputDirectory work\verification_build
 ```
 
-默认构建到根目录，兼容已有 Start.cmd 启动入口。根目录 CodexQuota.exe 为本机既有运行入口，不纳入 Git；使用 OutputDirectory 可以在不影响已运行程序的情况下构建。正式新增发布包统一进入 outputs/，中间文件进入 work/。
+默认以 AnyCPU / 32 位优先模式构建，减少托盘工具的 CLR 与对象开销；仍支持 Windows 10 / 11 与 .NET Framework 4.8。需要原生 AnyCPU 构建时可传入 -Platform anycpu。默认构建到根目录，兼容已有 Start.cmd 启动入口。根目录 CodexQuota.exe 为本机既有运行入口，不纳入 Git；使用 OutputDirectory 可以在不影响已运行程序的情况下构建。正式新增发布包统一进入 outputs/，中间文件进入 work/。
 
 生成发布包（会重新构建并运行测试）：
 
@@ -85,11 +93,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -Outpu
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package.ps1
 ```
 
-输出 `outputs/CodexQuota-1.0.1-windows.zip` 与 `outputs/SHA256SUMS.txt`。ZIP 内另附程序文件的校验值、使用说明和许可证。
+输出 `outputs/CodexQuota-1.0.2-windows.zip` 与 `outputs/SHA256SUMS.txt`。ZIP 内另附程序文件的校验值、使用说明和许可证。
 
 ## 验收与命令行
 
-36 项测试覆盖跨文件时间戳、时区、空窗口、畸形事件、UTF-8 分块、尾部半行、缓存、截断与删除、并发写入、扫描预算、月相像素和原生按钮。另含 4000 次图标创建与释放的 GDI / USER 句柄检查。详情见 [验证记录](docs/VALIDATION.md)。
+45 项测试覆盖跨文件时间戳、时区、空窗口、畸形事件、UTF-8 分块、尾部半行、缓存、截断与删除、并发写入、扫描预算、月相像素和原生按钮。另含 4000 次图标创建与释放的 GDI / USER 句柄检查。详情见 [验证记录](docs/VALIDATION.md)。
 
 ```powershell
 Start-Process .\CodexQuota.exe -ArgumentList '--inspect --output inspection.json' -Wait
@@ -107,6 +115,7 @@ Start-Process .\CodexQuota.exe -ArgumentList '--render --demo --output work\prev
 | tests/ | 自动化回归与资源检查 |
 | docs/ | 示例预览、验证与版本说明 |
 | build.ps1 | 本地编译和测试 |
+| tools/PerformanceBench.cs | 扫描分配、私有工作集和窗口生命周期对照 |
 | package.ps1 | 构建、测试、打包、校验 |
 | outputs/ | 正式发布 ZIP 与校验文件，不纳入 Git |
 | work/ | 临时构建和发布准备，不纳入 Git |

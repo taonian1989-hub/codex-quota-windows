@@ -4,7 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Web.Script.Serialization;
+using System.Xml;
 
 namespace CodexQuota
 {
@@ -62,7 +62,8 @@ namespace CodexQuota
             public bool Limited;
         }
         private readonly Dictionary<string, Cached> cache = new Dictionary<string, Cached>(StringComparer.OrdinalIgnoreCase);
-        private readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = 4 * 1024 * 1024, RecursionLimit = 64 };
+        private byte[] buffer;
+        internal int BufferCapacity { get { return buffer == null ? 0 : buffer.Length; } }
         public const int BlockSize = 256 * 1024;
         public const int MaxScanBytes = 64 * 1024 * 1024;
         private const int MaxLineBytes = 4 * 1024 * 1024;
@@ -128,84 +129,98 @@ namespace CodexQuota
             return b != null && b.RecordedAt > a.RecordedAt ? b : a;
         }
 
+        private void EnsureBuffer(int size)
+        {
+            if (buffer != null && buffer.Length >= size) return;
+            int capacity = Math.Min(MaxLineBytes + BlockSize, Math.Max(size, buffer == null ? BlockSize : buffer.Length * 2));
+            byte[] next = new byte[capacity];
+            if (buffer != null) Buffer.BlockCopy(buffer, 0, next, 0, Math.Min(buffer.Length, size));
+            buffer = next;
+        }
         private Cached ReadFile(string path, DateTimeOffset now)
         {
             Cached entry = new Cached();
-            using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
-            {
-                long end = stream.Length, consumed = 0;
-                byte[] carry = new byte[0];
-                bool skipOversize = false;
-                // Reverse fixed-size byte blocks; decode only complete lines. UTF-8 splits
-                // and partially appended events cannot invalidate an entire file.
-                while (end > 0 && consumed < MaxScanBytes)
-                {
-                    int count = (int)Math.Min(BlockSize, Math.Min(end, MaxScanBytes - consumed));
-                    long start = end - count;
-                    byte[] block = new byte[count];
-                    stream.Position = start;
-                    int read = 0, n;
-                    while (read < count && (n = stream.Read(block, read, count - read)) > 0) read += n;
-                    if (read != count) break; // A concurrent truncate: retry next poll.
-                    byte[] data = new byte[count + carry.Length];
-                    Buffer.BlockCopy(block, 0, data, 0, count);
-                    Buffer.BlockCopy(carry, 0, data, count, carry.Length);
-                    int lineEnd = data.Length;
-                    for (int i = count - 1; i >= 0; i--)
-                    {
-                        if (data[i] != 10) continue;
-                        if (skipOversize) skipOversize = false;
-                        else ParseLine(data, i + 1, lineEnd - i - 1, path, now, entry);
-                        lineEnd = i;
-                    }
-                    if (start == 0)
-                    {
-                        if (!skipOversize) ParseLine(data, 0, lineEnd, path, now, entry);
-                        carry = new byte[0];
-                    }
-                    else if (lineEnd > MaxLineBytes) { carry = new byte[0]; skipOversize = true; }
-                    else { carry = new byte[lineEnd]; Buffer.BlockCopy(data, 0, carry, 0, lineEnd); }
-                    consumed += count; end = start;
-                    if (entry.Primary != null && entry.Secondary != null) break;
-                }
-                entry.Limited = end > 0 && consumed >= MaxScanBytes && (entry.Primary == null || entry.Secondary == null);
-            }
-            return entry;
-        }
-
-        private void ParseLine(byte[] data, int offset, int length, string path, DateTimeOffset now, Cached entry)
-        {
-            if (length < 20 || length > MaxLineBytes) return;
-            string line = Encoding.UTF8.GetString(data, offset, length).TrimStart('\uFEFF');
-            if (line.IndexOf("\"rate_limits\"", StringComparison.Ordinal) < 0) return;
             try
             {
-                Dictionary<string, object> root = json.DeserializeObject(line) as Dictionary<string, object>;
-                if (Text(root, "type") != "event_msg") return;
-                Dictionary<string, object> payload = Object(root, "payload");
-                if (Text(payload, "type") != "token_count") return;
-                Dictionary<string, object> limits = Object(payload, "rate_limits");
-                if (limits == null) return;
-                string id = Text(limits, "limit_id");
-                if (!String.IsNullOrEmpty(id) && !String.Equals(id, "codex", StringComparison.OrdinalIgnoreCase)) return;
-                DateTimeOffset time;
-                if (!DateTimeOffset.TryParse(Text(root, "timestamp"), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out time) || time > now.AddMinutes(5)) return;
-                entry.Primary = Newest(entry.Primary, ParseWindow(Object(limits, "primary"), time, path, Text(limits, "plan_type")));
-                entry.Secondary = Newest(entry.Secondary, ParseWindow(Object(limits, "secondary"), time, path, Text(limits, "plan_type")));
+                using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                {
+                    long end = stream.Length, consumed = 0;
+                    int carry = 0;
+                    bool skipOversize = false;
+                    while (end > 0 && consumed < MaxScanBytes)
+                    {
+                        int count = (int)Math.Min(BlockSize, Math.Min(end, MaxScanBytes - consumed));
+                        long start = end - count;
+                        EnsureBuffer(count + carry);
+                        if (carry > 0) Buffer.BlockCopy(buffer, 0, buffer, count, carry);
+                        stream.Position = start;
+                        int read = 0, n;
+                        while (read < count && (n = stream.Read(buffer, read, count - read)) > 0) read += n;
+                        if (read != count) break;
+                        int lineEnd = count + carry;
+                        for (int i = count - 1; i >= 0; i--)
+                        {
+                            if (buffer[i] != 10) continue;
+                            if (skipOversize) skipOversize = false;
+                            else ParseLine(buffer, i + 1, lineEnd - i - 1, path, now, entry);
+                            lineEnd = i;
+                        }
+                        if (start == 0)
+                        {
+                            if (!skipOversize) ParseLine(buffer, 0, lineEnd, path, now, entry);
+                            carry = 0;
+                        }
+                        else if (lineEnd > MaxLineBytes) { carry = 0; skipOversize = true; }
+                        else carry = lineEnd;
+                        consumed += count; end = start;
+                        if (entry.Primary != null && entry.Secondary != null) break;
+                    }
+                    entry.Limited = end > 0 && consumed >= MaxScanBytes && (entry.Primary == null || entry.Secondary == null);
+                }
+                return entry;
             }
+            finally
+            {
+                // Keep the ordinary shared buffer, but do not pin a multi-MB buffer
+                // in the resident reader after an unusually large log line.
+                if (buffer != null && buffer.Length > 2 * BlockSize) buffer = null;
+            }
+        }
+        private static bool ContainsRateLimits(byte[] data, int offset, int length)
+        {
+            // ASCII prefilter before any UTF-8 decoding or JSON allocation.
+            int end = offset + length - 13;
+            for (int i = offset; i <= end; i++)
+                if (data[i] == 34 && data[i + 1] == 114 && data[i + 2] == 97 && data[i + 3] == 116 && data[i + 4] == 101 && data[i + 5] == 95 && data[i + 6] == 108 && data[i + 7] == 105 && data[i + 8] == 109 && data[i + 9] == 105 && data[i + 10] == 116 && data[i + 11] == 115 && data[i + 12] == 34) return true;
+            return false;
+        }
+        private void ParseLine(byte[] data, int offset, int length, string path, DateTimeOffset now, Cached entry)
+        {
+            if (length < 20 || length > MaxLineBytes || !ContainsRateLimits(data, offset, length)) return;
+            try
+            {
+                QuotaEvent record = QuotaJsonReader.Read(data, offset, length);
+                if (record.Kind != "event_msg" || record.PayloadKind != "token_count") return;
+                if (!String.IsNullOrEmpty(record.LimitId) && !String.Equals(record.LimitId, "codex", StringComparison.OrdinalIgnoreCase)) return;
+                DateTimeOffset time;
+                if (!DateTimeOffset.TryParse(record.Stamp, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out time) || time > now.AddMinutes(5)) return;
+                if (entry.Primary == null || time > entry.Primary.RecordedAt)
+                    entry.Primary = Newest(entry.Primary, ParseWindow(record.Primary, time, path, record.Plan));
+                if (entry.Secondary == null || time > entry.Secondary.RecordedAt)
+                    entry.Secondary = Newest(entry.Secondary, ParseWindow(record.Secondary, time, path, record.Plan));
+            }
+            catch (XmlException) { }
             catch (ArgumentException) { }
             catch (InvalidOperationException) { }
             catch (FormatException) { }
             catch (OverflowException) { }
         }
-
-        private static UsageWindow ParseWindow(Dictionary<string, object> raw, DateTimeOffset recorded, string path, string plan)
+        private static UsageWindow ParseWindow(QuotaValues raw, DateTimeOffset recorded, string path, string plan)
         {
-            double? used = Number(raw, "used_percent");
-            if (!used.HasValue) return null;
-            double minutes = Number(raw, "window_minutes") ?? 0;
-            UsageWindow w = new UsageWindow { UsedPercent = Math.Max(0, Math.Min(100, used.Value)), WindowMinutes = minutes > 0 && minutes <= 525600 ? (int)minutes : 0, RecordedAt = recorded, SourceFile = path, Plan = plan };
-            double? epoch = Number(raw, "resets_at");
+            if (!raw.Used.HasValue) return null;
+            double minutes = raw.Minutes ?? 0;
+            UsageWindow w = new UsageWindow { UsedPercent = Math.Max(0, Math.Min(100, raw.Used.Value)), WindowMinutes = minutes > 0 && minutes <= 525600 ? (int)minutes : 0, RecordedAt = recorded, SourceFile = path, Plan = plan };
+            double? epoch = raw.Reset;
             if (epoch.HasValue && epoch > 0 && epoch <= 253402300799d)
                 w.ResetsAt = new DateTimeOffset(1970, 1, 1, 0, 0, 0, TimeSpan.Zero).AddSeconds(epoch.Value);
             else if (w.WindowMinutes > 0)
@@ -213,19 +228,6 @@ namespace CodexQuota
                 w.ResetsAt = recorded.AddMinutes(w.WindowMinutes); w.ResetEstimated = true;
             }
             return w;
-        }
-
-        private static Dictionary<string, object> Object(Dictionary<string, object> d, string k)
-        { object v; return d != null && d.TryGetValue(k, out v) ? v as Dictionary<string, object> : null; }
-        private static string Text(Dictionary<string, object> d, string k)
-        { object v; return d != null && d.TryGetValue(k, out v) ? v as string : null; }
-        private static double? Number(Dictionary<string, object> d, string k)
-        {
-            object v;
-            if (d == null || !d.TryGetValue(k, out v) || v == null || v is bool || v is string) return null;
-            if (!(v is int || v is long || v is double || v is decimal || v is float)) return null;
-            double n = Convert.ToDouble(v, CultureInfo.InvariantCulture);
-            return Double.IsNaN(n) || Double.IsInfinity(n) ? null : (double?)n;
         }
     }
 }

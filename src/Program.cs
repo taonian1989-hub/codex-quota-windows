@@ -7,7 +7,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web.Script.Serialization;
+
 using System.Windows.Forms;
 
 namespace CodexQuota
@@ -73,7 +73,7 @@ namespace CodexQuota
                 if (Has(args, "--inspect") || Has(args, "--render") || Has(args, "--smoke"))
                 {
                     string output = Value(args, "--output");
-                    if (output != null && !Has(args, "--render")) Write(output, new JavaScriptSerializer().Serialize(new { error = ex.Message }));
+                    if (output != null && !Has(args, "--render")) Write(output, JsonData.Stringify(new ErrorReport { Error = ex.Message }));
                     Console.Error.WriteLine(ex.Message);
                 }
                 else MessageBox.Show("无法启动 Codex Quota：" + ex.Message, "Codex Quota", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -96,113 +96,126 @@ namespace CodexQuota
         internal static string Report(UsageSnapshot s)
         {
             if (s == null) return "{\"error\":\"not_loaded\"}";
-            return new JavaScriptSerializer().Serialize(new
+            return JsonData.Stringify(new SnapshotReport
             {
-                version = "1.0.1", sessions = s.SessionRoot, loaded_at = s.LoadedAt.ToString("o"),
-                recorded_at = s.RecordedAt.HasValue ? s.RecordedAt.Value.ToString("o") : null,
-                has_data = s.HasData, error = s.Error, files = s.FileCount, read_files = s.ReadCount,
-                unreadable_files = s.UnreadableFiles, scan_limited_files = s.LimitedFiles,
-                primary = WindowReport(s.Primary), secondary = WindowReport(s.Secondary)
+                Version = "1.0.2", Sessions = s.SessionRoot, LoadedAt = s.LoadedAt.ToString("o"),
+                RecordedAt = s.RecordedAt.HasValue ? s.RecordedAt.Value.ToString("o") : null,
+                HasData = s.HasData, Error = s.Error, Files = s.FileCount, ReadFiles = s.ReadCount,
+                UnreadableFiles = s.UnreadableFiles, LimitedFiles = s.LimitedFiles,
+                Primary = MakeWindowReport(s.Primary), Secondary = MakeWindowReport(s.Secondary)
             });
         }
-        private static object WindowReport(UsageWindow w)
+        private static WindowReport MakeWindowReport(UsageWindow w)
         {
-            return w == null ? null : new
+            return w == null ? null : new WindowReport
             {
-                remaining_percent = w.RemainingPercent, used_percent = w.UsedPercent, window_minutes = w.WindowMinutes,
-                resets_at = w.ResetsAt.HasValue ? w.ResetsAt.Value.ToString("o") : null,
-                reset_estimated = w.ResetEstimated, reset_time_passed = w.Expired(DateTimeOffset.Now),
-                recorded_at = w.RecordedAt.ToString("o"), source = w.SourceFile, plan = w.Plan
+                Remaining = w.RemainingPercent, Used = w.UsedPercent, Minutes = w.WindowMinutes,
+                Reset = w.ResetsAt.HasValue ? w.ResetsAt.Value.ToString("o") : null,
+                Estimated = w.ResetEstimated, Expired = w.Expired(DateTimeOffset.Now),
+                Recorded = w.RecordedAt.ToString("o"), Source = w.SourceFile, Plan = w.Plan
             };
         }
     }
-
     internal sealed class TrayContext : ApplicationContext
     {
         private readonly Settings settings;
         private readonly UsageReader reader = new UsageReader();
-        private readonly QuotaForm panel;
+        private readonly Control dispatcher;
+        private QuotaForm panel;
         private readonly NotifyIcon ring, number;
         private readonly ContextMenuStrip menu;
         private readonly System.Windows.Forms.Timer timer;
-        private Icon ringIcon, numberIcon;
+        private readonly TrayIconCache icons = new TrayIconCache();
         private bool busy, pendingForce, closing;
+        private string notice;
         public UsageSnapshot Snapshot { get; private set; }
+        internal bool HasPanel { get { return panel != null; } }
+        internal int IconRenderCount { get { return icons.RenderCount; } }
         public TrayContext(bool show, string rootOverride)
         {
             settings = Settings.Load();
             if (rootOverride != null) settings.SessionRoot = rootOverride;
-            panel = new QuotaForm(settings);
-            IntPtr handle = panel.Handle;
-            menu = new ContextMenuStrip();
-            menu.Font = new Font("Microsoft YaHei UI", 9);
-            menu.Items.Add("查看额度", null, delegate { panel.ShowNearTray(); });
+            // A tiny dispatcher supplies the UI synchronization context. The full
+            // detail window is constructed on first use, not on background startup.
+            dispatcher = new Control(); IntPtr handle = dispatcher.Handle;
+            menu = new ContextMenuStrip(); menu.Font = new Font("Microsoft YaHei UI", 9);
+            menu.Items.Add("查看额度", null, delegate { ShowPanel(); });
             menu.Items.Add("立即刷新", null, delegate { Refresh(true); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("打开会话目录", null, delegate { OpenSessions(); });
             menu.Items.Add("设置…", null, delegate { Configure(); });
             menu.Items.Add("写入诊断日志", null, delegate
             {
-                try { string path = Diagnostics.Export(Snapshot); panel.Notice = "诊断已保存至 " + Path.GetFileName(path); panel.UpdateView(); OpenPath(Settings.DataDirectory); }
+                try { string path = Diagnostics.Export(Snapshot); notice = "诊断已保存至 " + Path.GetFileName(path); UpdatePanel(); OpenPath(Settings.DataDirectory); }
                 catch (Exception ex) { ShowError("无法写入诊断日志", ex); }
             });
-            menu.Items.Add(new ToolStripSeparator());
-            menu.Items.Add("退出 Codex Quota", null, delegate { Shutdown(); });
+            menu.Items.Add(new ToolStripSeparator()); menu.Items.Add("退出 Codex Quota", null, delegate { Shutdown(); });
             ring = new NotifyIcon { ContextMenuStrip = menu, Text = "Codex Quota · 正在读取", Visible = false };
             number = new NotifyIcon { ContextMenuStrip = menu, Text = "Codex Quota · 剩余百分比", Visible = false };
             ring.MouseClick += OnTrayClick; number.MouseClick += OnTrayClick;
-            panel.RefreshRequested += delegate { Refresh(true); };
-            panel.SettingsRequested += Configure;
-            panel.FolderRequested += OpenSessions;
             UpdateTray();
             timer = new System.Windows.Forms.Timer { Interval = settings.RefreshSeconds * 1000 };
             timer.Tick += delegate { Refresh(false); }; timer.Start();
-            if (show) panel.ShowNearTray();
+            if (show) ShowPanel();
             Refresh(true);
         }
+        private QuotaForm EnsurePanel()
+        {
+            if (panel == null)
+            {
+                panel = new QuotaForm(settings);
+                panel.RefreshRequested += delegate { Refresh(true); };
+                panel.SettingsRequested += Configure; panel.FolderRequested += OpenSessions;
+                UpdatePanel();
+            }
+            return panel;
+        }
+        private void UpdatePanel()
+        {
+            if (panel == null) return;
+            panel.Snapshot = Snapshot; panel.Busy = busy; panel.Notice = notice;
+            if (panel.Visible) panel.UpdateView();
+        }
+        private void ShowPanel() { EnsurePanel().ShowNearTray(); }
         private void OnTrayClick(object sender, MouseEventArgs e)
-        { if (e.Button == MouseButtons.Left) { if (panel.Visible) panel.Hide(); else panel.ShowNearTray(); } }
+        { if (e.Button == MouseButtons.Left) { if (panel != null && panel.Visible) panel.Hide(); else ShowPanel(); } }
         public void Reveal()
         {
-            if (closing || panel.IsDisposed) return;
-            try { panel.BeginInvoke((Action)delegate { if (!closing) panel.ShowNearTray(); }); }
+            if (closing || dispatcher.IsDisposed) return;
+            try { dispatcher.BeginInvoke((Action)delegate { if (!closing) ShowPanel(); }); }
             catch (InvalidOperationException) { }
         }
         private async void Refresh(bool force)
         {
             if (closing) return;
             if (busy) { pendingForce |= force; return; }
-            busy = true; panel.Busy = true; panel.UpdateView();
+            busy = true; UpdatePanel();
             string root = settings.ResolvedRoot;
             try
             {
                 UsageSnapshot result = await Task.Run(() => reader.Load(root, force));
                 if (closing) return;
                 if (root != settings.ResolvedRoot) { pendingForce = true; return; }
-                Snapshot = result; panel.Snapshot = result;
-                panel.Notice = null; UpdateTray();
+                Snapshot = result; notice = null; UpdateTray();
             }
             catch (Exception)
-            {
-                if (!closing) panel.Notice = "本次读取失败，稍后重试或检查目录权限。";
-            }
+            { if (!closing) notice = "本次读取失败，稍后重试或检查目录权限。"; }
             finally
             {
                 busy = false;
                 if (!closing)
                 {
-                    panel.Busy = false; panel.UpdateView();
+                    UpdatePanel();
                     if (pendingForce) { pendingForce = false; Refresh(true); }
                 }
             }
         }
         private void UpdateTray()
         {
-            Icon nextRing = Appearance.MakeIcon(Snapshot, false, settings.LightTheme, 32);
-            Icon nextNumber = Appearance.MakeIcon(Snapshot, true, settings.LightTheme, 32);
-            ring.Icon = nextRing; number.Icon = nextNumber;
-            if (ringIcon != null) ringIcon.Dispose(); if (numberIcon != null) numberIcon.Dispose();
-            ringIcon = nextRing; numberIcon = nextNumber;
+            if (!settings.ShowNumberIcon) number.Visible = false;
+            icons.Update(Snapshot, settings.LightTheme, settings.ShowNumberIcon);
+            if (icons.RingChanged) ring.Icon = icons.Ring;
+            if (icons.NumberChanged) number.Icon = icons.Number;
             string text = "Codex · 5h " + Remaining(Snapshot == null ? null : Snapshot.Primary) + " · 周 " + Remaining(Snapshot == null ? null : Snapshot.Secondary);
             if (Snapshot != null && Snapshot.RecordedAt.HasValue) text += " · " + Appearance.Age(Snapshot.RecordedAt.Value);
             text = text.Length > 63 ? text.Substring(0, 63) : text;
@@ -215,8 +228,8 @@ namespace CodexQuota
         {
             using (SettingsForm dialog = new SettingsForm(settings))
             {
-                if (dialog.ShowDialog(panel) == DialogResult.OK)
-                { timer.Interval = settings.RefreshSeconds * 1000; panel.UpdateView(); UpdateTray(); Refresh(true); }
+                if (dialog.ShowDialog(EnsurePanel()) == DialogResult.OK)
+                { timer.Interval = settings.RefreshSeconds * 1000; UpdatePanel(); UpdateTray(); Refresh(true); }
             }
         }
         private void OpenSessions()
@@ -226,25 +239,24 @@ namespace CodexQuota
             catch (Exception ex) { ShowError("无法打开目录", ex); }
         }
         private static void OpenPath(string path) { Process.Start(new ProcessStartInfo { FileName = path, UseShellExecute = true }); }
-        private void ShowError(string title, Exception ex) { MessageBox.Show(panel, title + "：" + ex.Message, "Codex Quota", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        private void ShowError(string title, Exception ex) { MessageBox.Show(EnsurePanel(), title + "：" + ex.Message, "Codex Quota", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         public void Shutdown()
         {
             if (closing) return;
             closing = true; timer.Stop(); ring.Visible = false; number.Visible = false;
-            panel.AllowClose = true; panel.Close(); ExitThread();
+            if (panel != null) { panel.AllowClose = true; panel.Close(); } ExitThread();
         }
         protected override void Dispose(bool disposing)
         {
             if (disposing)
             {
-                closing = true; timer.Dispose(); ring.Dispose(); number.Dispose(); menu.Dispose();
-                if (ringIcon != null) ringIcon.Dispose(); if (numberIcon != null) numberIcon.Dispose();
-                panel.Dispose();
+                closing = true; timer.Dispose(); ring.Dispose(); number.Dispose();
+                Font menuFont = menu.Font; menu.Dispose(); menuFont.Dispose(); icons.Dispose();
+                if (panel != null) panel.Dispose(); dispatcher.Dispose();
             }
             base.Dispose(disposing);
         }
     }
-
     public static class Preview
     {
         public static UsageSnapshot Demo()

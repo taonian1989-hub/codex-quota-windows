@@ -2,29 +2,35 @@ using System;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
-using System.Web.Script.Serialization;
+using System.Runtime.Serialization;
+using System.Xml;
 using Microsoft.Win32;
 
 namespace CodexQuota
 {
+    [DataContract]
     public sealed class Settings
     {
-        public string SessionRoot { get; set; }
-        public int RefreshSeconds { get; set; }
-        public bool ShowNumberIcon { get; set; }
-        public bool LightTheme { get; set; }
+        [DataMember] public string SessionRoot { get; set; }
+        [DataMember] public int RefreshSeconds { get; set; }
+        [DataMember] public bool ShowNumberIcon { get; set; }
+        [DataMember] public bool LightTheme { get; set; }
         public Settings() { RefreshSeconds = 30; ShowNumberIcon = true; }
+        [OnDeserializing] private void InitializeDefaults(StreamingContext context) { RefreshSeconds = 30; ShowNumberIcon = true; }
         public static string DataDirectory { get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CodexQuota"); } }
         public string ResolvedRoot { get { return String.IsNullOrWhiteSpace(SessionRoot) ? UsageReader.DefaultSessionRoot() : SessionRoot; } }
         public static Settings Load()
         {
             try
             {
-                Settings s = new JavaScriptSerializer().Deserialize<Settings>(File.ReadAllText(Path.Combine(DataDirectory, "settings.json")));
+                Settings s;
+                using (FileStream stream = File.OpenRead(Path.Combine(DataDirectory, "settings.json"))) s = JsonData.Read<Settings>(stream);
                 if (s == null) return new Settings();
                 if (s.RefreshSeconds < 10 || s.RefreshSeconds > 3600) s.RefreshSeconds = 30;
                 return s;
             }
+            catch (SerializationException) { return new Settings(); }
+            catch (XmlException) { return new Settings(); }
             catch (IOException) { return new Settings(); }
             catch (UnauthorizedAccessException) { return new Settings(); }
             catch (ArgumentException) { return new Settings(); }
@@ -35,7 +41,7 @@ namespace CodexQuota
             Directory.CreateDirectory(DataDirectory);
             string path = Path.Combine(DataDirectory, "settings.json");
             string tmp = path + ".tmp";
-            File.WriteAllText(tmp, new JavaScriptSerializer().Serialize(this), new UTF8Encoding(false));
+            File.WriteAllBytes(tmp, JsonData.Encode(this));
             if (File.Exists(path)) File.Replace(tmp, path, null); else File.Move(tmp, path);
         }
         public static bool AutoStart
@@ -66,7 +72,7 @@ namespace CodexQuota
             if (File.Exists(path) && new FileInfo(path).Length > 512 * 1024)
             { string old = path + ".1"; if (File.Exists(old)) File.Delete(old); File.Move(path, old); }
             StringBuilder b = new StringBuilder();
-            b.AppendLine("=== Codex Quota 1.0.1 | " + DateTimeOffset.Now.ToString("o") + " ===");
+            b.AppendLine("=== Codex Quota 1.0.2 | " + DateTimeOffset.Now.ToString("o") + " ===");
             b.AppendLine("Runtime=" + Environment.Version + " OS=" + Environment.OSVersion);
             b.AppendLine("PrivateMB=" + (Process.GetCurrentProcess().PrivateMemorySize64 / 1048576.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
             if (s != null)
