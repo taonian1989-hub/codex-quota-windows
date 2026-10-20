@@ -1,0 +1,12 @@
+work/
+outputs/
+*.exe
+*.pdb
+*.log
+*.jsonl
+settings.json
+inspection.json
+smoke.json
+SHA256SUMS.txt
+.env
+.env.*

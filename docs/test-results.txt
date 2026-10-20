@@ -1,0 +1,32 @@
+PASS missing directory is explicit
+PASS empty directory is explicit
+PASS remaining = 100 - used, zero remains valid
+PASS event timestamps outrank file modification time
+PASS timestamps are normalized across timezones
+PASS null windows independently fall back
+PASS missing window is unknown rather than zero
+PASS malformed JSON and partial append are skipped
+PASS message text and non-token events are ignored
+PASS model-specific bucket cannot overwrite Codex pool
+PASS missing limit_id remains backward compatible
+PASS invalid timestamps never fall back to mtime
+PASS implausible future snapshots are ignored
+PASS numeric strings and booleans are not percentages
+PASS numeric percentages are bounded
+PASS reset epoch is parsed in UTC
+PASS missing reset uses marked estimate
+PASS passed reset retains observed quota and warns
+PASS UTF-8 block boundary does not lose records
+PASS reverse scan reaches older non-null secondary
+PASS BOM and CRLF are accepted
+PASS all files considered beyond upstream twenty-file cap
+PASS unchanged files are cached and force bypasses cache
+PASS every file fingerprint participates in cache
+PASS truncated and deleted files cannot retain old cache
+PASS read succeeds while Codex holds append handle
+PASS scan budget is bounded and explicitly reported
+PASS moon boundaries and lit area are monotonic
+  Native handles delta: GDI=1 USER=0
+PASS 4000 icon lifecycles do not leak native handles
+PASS native controls dispatch refresh, settings, folder and hide
+RESULT: 30 passed, 0 failed

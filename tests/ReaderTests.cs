@@ -1,0 +1,215 @@
+using System;
+using System.Diagnostics;
+using System.Drawing;
+using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Web.Script.Serialization;
+using System.Windows.Forms;
+using CodexQuota;
+using Appearance = CodexQuota.Appearance;
+
+internal static class ReaderTests
+{
+    private static string root;
+    private static int passed, failed;
+    private static readonly JavaScriptSerializer Json = new JavaScriptSerializer();
+    private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow.AddSeconds(-5);
+    [DllImport("user32.dll")] private static extern int GetGuiResources(IntPtr process, int flag);
+
+    [STAThread]
+    private static int Main()
+    {
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        root = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "fixtures-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            Run("missing directory is explicit", delegate { Check(!new UsageReader().Load(Path.Combine(root, "absent"), true).HasData); });
+            Run("empty directory is explicit", delegate { Check(Read(Folder()).Error.Contains(".jsonl")); });
+            Run("remaining = 100 - used, zero remains valid", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(0), W(100)));
+                UsageSnapshot s = Read(d); Equal(s.Primary.RemainingPercent, 100); Equal(s.Secondary.RemainingPercent, 0);
+            });
+            Run("event timestamps outrank file modification time", delegate
+            {
+                string d = Folder(); string old = Put(d, "old", Event(Now.AddHours(-3), W(90), W(80)));
+                string recent = Put(d, "new", Event(Now, W(12), W(27)));
+                File.SetLastWriteTimeUtc(recent, DateTime.UtcNow.AddHours(-2)); File.SetLastWriteTimeUtc(old, DateTime.UtcNow);
+                Equal(Read(d).Primary.RemainingPercent, 88);
+            });
+            Run("timestamps are normalized across timezones", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now.ToOffset(TimeSpan.FromHours(8)), W(15), W(23)));
+                Put(d, "b", Event(Now.AddMinutes(-1), W(80), W(80))); Equal(Read(d).Primary.RemainingPercent, 85);
+            });
+            Run("null windows independently fall back", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now.AddMinutes(-1), W(10), W(20)) + "\n" + Event(Now, null, W(35)));
+                UsageSnapshot s = Read(d); Equal(s.Primary.RemainingPercent, 90); Equal(s.Secondary.RemainingPercent, 65);
+                Check(s.Primary.RecordedAt < s.Secondary.RecordedAt);
+            });
+            Run("missing window is unknown rather than zero", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(0), null)); UsageSnapshot s = Read(d);
+                Check(s.Primary != null && s.Secondary == null && s.HasData);
+            });
+            Run("malformed JSON and partial append are skipped", delegate
+            {
+                string d = Folder(); Put(d, "a", "not json\n" + Event(Now, W(14), W(17)) + "\n{\"payload\":{\"rate_limits\":");
+                Equal(Read(d).Primary.RemainingPercent, 86);
+            });
+            Run("message text and non-token events are ignored", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(99), W(99)).Replace("event_msg", "response_item") + "\n" + Event(Now, W(1), W(1)).Replace("token_count", "agent_message"));
+                Check(!Read(d).HasData);
+            });
+            Run("model-specific bucket cannot overwrite Codex pool", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now.AddMinutes(-1), W(5), W(6)) + "\n" + Event(Now, W(99), W(99)).Replace("\"codex\"", "\"codex_other\""));
+                Equal(Read(d).Primary.RemainingPercent, 95);
+            });
+            Run("missing limit_id remains backward compatible", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(11), W(12)).Replace("\"limit_id\":\"codex\",", "")); Equal(Read(d).Primary.RemainingPercent, 89);
+            });
+            Run("invalid timestamps never fall back to mtime", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(15), W(15)).Replace(Now.ToString("o"), "bad-time")); Check(!Read(d).HasData);
+            });
+            Run("implausible future snapshots are ignored", delegate
+            { string d = Folder(); Put(d, "a", Event(Now.AddDays(1), W(15), W(15))); Check(!Read(d).HasData); });
+            Run("numeric strings and booleans are not percentages", delegate
+            { string d = Folder(); Put(d, "a", Event(Now, new { used_percent = "25" }, new { used_percent = true })); Check(!Read(d).HasData); });
+            Run("numeric percentages are bounded", delegate
+            { string d = Folder(); Put(d, "a", Event(Now, W(-4), W(110))); UsageSnapshot s = Read(d); Equal(s.Primary.RemainingPercent, 100); Equal(s.Secondary.RemainingPercent, 0); });
+            Run("reset epoch is parsed in UTC", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(20), W(25))); UsageSnapshot s = Read(d);
+                Check(Math.Abs((s.Primary.ResetsAt.Value - Now.AddHours(2)).TotalSeconds) < 1);
+            });
+            Run("missing reset uses marked estimate", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, new { used_percent = 12, window_minutes = 300 }, null)); UsageWindow w = Read(d).Primary;
+                Check(w.ResetEstimated && Math.Abs((w.ResetsAt.Value - Now.AddMinutes(300)).TotalSeconds) < 1);
+            });
+            Run("passed reset retains observed quota and warns", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now.AddHours(-8), new { used_percent = 80, resets_at = Epoch(Now.AddHours(-3)) }, null));
+                UsageWindow w = Read(d).Primary; Equal(w.RemainingPercent, 20); Check(w.Expired(DateTimeOffset.Now)); Check(Appearance.Countdown(w).Contains("等待"));
+            });
+            Run("UTF-8 block boundary does not lose records", delegate
+            {
+                string d = Folder(); string text = new string('汉', UsageReader.BlockSize) + "\n" + Event(Now, W(6), W(8)) + "\n" + new string('月', UsageReader.BlockSize / 3);
+                Put(d, "a", text); Equal(Read(d).Primary.RemainingPercent, 94);
+            });
+            Run("reverse scan reaches older non-null secondary", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now.AddMinutes(-2), W(10), W(44)) + "\n" + new string('x', UsageReader.BlockSize + 111) + "\n" + Event(Now, W(22), null));
+                UsageSnapshot s = Read(d); Equal(s.Primary.RemainingPercent, 78); Equal(s.Secondary.RemainingPercent, 56);
+            });
+            Run("BOM and CRLF are accepted", delegate
+            { string d = Folder(); Put(d, "a", "\uFEFF" + Event(Now, W(1), W(2)) + "\r\n"); Equal(Read(d).Primary.RemainingPercent, 99); });
+            Run("all files considered beyond upstream twenty-file cap", delegate
+            {
+                string d = Folder(); string winner = Put(d, "winner", Event(Now, W(3), W(4))); File.SetLastWriteTimeUtc(winner, DateTime.UtcNow.AddDays(-30));
+                for (int i = 0; i < 25; i++) Put(d, "empty-" + i, "{}");
+                Equal(Read(d).Primary.RemainingPercent, 97);
+            });
+            Run("unchanged files are cached and force bypasses cache", delegate
+            {
+                string d = Folder(); Put(d, "a", Event(Now, W(3), W(4))); UsageReader reader = new UsageReader();
+                Check(reader.Load(d, false).ReadCount == 1); Check(reader.Load(d, false).ReadCount == 0); Check(reader.Load(d, true).ReadCount == 1);
+            });
+            Run("every file fingerprint participates in cache", delegate
+            {
+                string d = Folder(); string a = Put(d, "a", Event(Now.AddMinutes(-5), W(10), W(10)));
+                string b = Put(d, "b", Event(Now.AddMinutes(-4), W(20), W(20))); File.SetLastWriteTimeUtc(b, DateTime.UtcNow.AddDays(1));
+                UsageReader reader = new UsageReader(); reader.Load(d, false);
+                File.AppendAllText(a, "\n" + Event(Now, W(33), W(33))); UsageSnapshot s = reader.Load(d, false);
+                Equal(s.Primary.RemainingPercent, 67); Check(s.ReadCount == 1);
+            });
+            Run("truncated and deleted files cannot retain old cache", delegate
+            {
+                string d = Folder(); string a = Put(d, "a", Event(Now, W(7), W(9))); UsageReader reader = new UsageReader(); Check(reader.Load(d, false).HasData);
+                File.WriteAllText(a, "{}"); Check(!reader.Load(d, false).HasData); File.Delete(a); Check(!reader.Load(d, false).HasData);
+            });
+            Run("read succeeds while Codex holds append handle", delegate
+            {
+                string d = Folder(); string a = Put(d, "a", Event(Now, W(2), W(3)));
+                using (FileStream stream = new FileStream(a, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite)) Equal(Read(d).Primary.RemainingPercent, 98);
+            });
+            Run("scan budget is bounded and explicitly reported", delegate
+            {
+                string d = Folder(); string path = Path.Combine(d, "big.jsonl");
+                using (FileStream f = File.Create(path)) f.SetLength(UsageReader.MaxScanBytes + UsageReader.BlockSize);
+                UsageSnapshot s = Read(d); Check(!s.HasData && s.LimitedFiles == 1);
+            });
+            Run("moon boundaries and lit area are monotonic", delegate
+            {
+                double[] values = { 10, 30, 40, 50, 60, 80, 100 }; int last = 0;
+                for (int i = 0; i < values.Length; i++)
+                {
+                    Check(Appearance.MoonLevel(values[i]) == i);
+                    using (Bitmap b = new Bitmap(64, 64))
+                    {
+                        using (Graphics g = Graphics.FromImage(b)) Appearance.DrawMoon(g, new RectangleF(4, 4, 56, 56), values[i]);
+                        int lit = 0;
+                        for (int x = 0; x < 64; x++) for (int y = 0; y < 64; y++) if (b.GetPixel(x, y).R > 210) lit++;
+                        Check(lit > last); last = lit;
+                    }
+                }
+                Check(Appearance.MoonLevel(20) == 1 && Appearance.MoonLevel(90) == 6);
+            });
+            Run("4000 icon lifecycles do not leak native handles", delegate
+            {
+                UsageSnapshot demo = Preview.Demo();
+                using (Icon warm = Appearance.MakeIcon(demo, false, false, 32)) { }
+                GC.Collect(); GC.WaitForPendingFinalizers();
+                Process p = Process.GetCurrentProcess();
+                int gdi = GetGuiResources(p.Handle, 0), user = GetGuiResources(p.Handle, 1);
+                for (int i = 0; i < 4000; i++) using (Icon icon = Appearance.MakeIcon(demo, i % 2 == 0, false, 32)) { }
+                GC.Collect(); GC.WaitForPendingFinalizers();
+                int gd = GetGuiResources(p.Handle, 0) - gdi, ud = GetGuiResources(p.Handle, 1) - user;
+                Console.WriteLine("  Native handles delta: GDI=" + gd + " USER=" + ud); Check(gd <= 8 && ud <= 8);
+            });
+            Run("native controls dispatch refresh, settings, folder and hide", delegate
+            {
+                using (QuotaForm form = new QuotaForm(new Settings()))
+                {
+                    int refresh = 0, settings = 0, folder = 0;
+                    form.RefreshRequested += delegate { refresh++; }; form.SettingsRequested += delegate { settings++; }; form.FolderRequested += delegate { folder++; };
+                    form.Location = new Point(-32000, -32000); form.TopMost = false; form.Show(); Application.DoEvents();
+                    Check(form.Controls.Count == 4 && !form.ShowInTaskbar);
+                    foreach (Button b in form.Controls.OfType<Button>())
+                        if (b.Text == "立即刷新" || b.Text == "设置" || b.Text == "日志目录") b.PerformClick();
+                    Check(refresh == 1 && settings == 1 && folder == 1);
+                    form.Busy = true; form.UpdateView(); Check(!form.Controls.OfType<Button>().First(b => b.Text == "正在读取…").Enabled);
+                    form.Controls.OfType<Button>().First(b => b.Text == "×").PerformClick(); Check(!form.Visible);
+                    form.AllowClose = true; form.Close();
+                }
+            });
+            Console.WriteLine("RESULT: " + passed + " passed, " + failed + " failed");
+            return failed == 0 ? 0 : 1;
+        }
+        finally
+        {
+            string full = Path.GetFullPath(root), parent = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
+            if (full.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && Path.GetFileName(full).StartsWith("fixtures-")) Directory.Delete(full, true);
+        }
+    }
+    private static void Run(string name, Action test)
+    { try { test(); passed++; Console.WriteLine("PASS " + name); } catch (Exception e) { failed++; Console.WriteLine("FAIL " + name + ": " + e.Message); } }
+    private static string Folder() { string d = Path.Combine(root, Guid.NewGuid().ToString("N")); Directory.CreateDirectory(d); return d; }
+    private static string Put(string d, string name, string content) { string p = Path.Combine(d, name + ".jsonl"); File.WriteAllText(p, content, new UTF8Encoding(false)); return p; }
+    private static UsageSnapshot Read(string d) { return new UsageReader().Load(d, true); }
+    private static object W(double used) { return new { used_percent = used, window_minutes = 300, resets_at = Epoch(Now.AddHours(2)) }; }
+    private static long Epoch(DateTimeOffset d) { return (long)(d - new DateTimeOffset(1970, 1, 1, 0, 0, 0, TimeSpan.Zero)).TotalSeconds; }
+    private static string Event(DateTimeOffset t, object primary, object secondary)
+    { return Json.Serialize(new { timestamp = t.ToString("o"), type = "event_msg", payload = new { type = "token_count", rate_limits = new { limit_id = "codex", primary = primary, secondary = secondary, plan_type = "plus" } } }); }
+    private static void Check(bool condition) { if (!condition) throw new Exception("Assertion failed"); }
+    private static void Equal(double actual, double expected) { if (Math.Abs(actual - expected) > 0.001) throw new Exception("Expected " + expected + ", got " + actual); }
+}
