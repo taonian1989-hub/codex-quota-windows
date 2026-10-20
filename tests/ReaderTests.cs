@@ -192,6 +192,71 @@ internal static class ReaderTests
                     form.AllowClose = true; form.Close();
                 }
             });
+            foreach (int percent in new int[] { 100, 125, 150, 200 })
+            {
+                int scale = percent;
+                Run("settings layout fits and interval is selectable at " + scale + "%", delegate
+                {
+                    using (SettingsForm form = new SettingsForm(new Settings(), scale / 100f))
+                    {
+                        form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-32000, -32000);
+                        form.Show(); Application.DoEvents();
+                        foreach (Control control in Descendants(form))
+                        {
+                            if (control is Label || control is Button || control is CheckBox)
+                            {
+                                Size preferred = control.GetPreferredSize(Size.Empty);
+                                if (control.Width + 1 < preferred.Width || control.Height + 1 < preferred.Height)
+                                    throw new Exception("Clipped control: " + control.Text + " actual=" + control.Size + " preferred=" + preferred);
+                            }
+                        }
+                        ComboBox combo = (ComboBox)form.Controls.Find("refreshInterval", true)[0];
+                        Control label = form.Controls.Find("refreshLabel", true)[0];
+                        Check(!combo.Bounds.IntersectsWith(label.Bounds));
+                        Check(combo.Parent.GetChildAtPoint(new Point(combo.Left + combo.Width / 2, combo.Top + combo.Height / 2)) == combo);
+                        combo.SelectedItem = "60";
+                        int seconds; Check(form.TryReadRefreshInterval(out seconds) && seconds == 60);
+                        combo.Text = "45"; Check(form.TryReadRefreshInterval(out seconds) && seconds == 45);
+                        foreach (string boundary in new string[] { "10", "3600" })
+                        { combo.Text = boundary; Check(form.TryReadRefreshInterval(out seconds)); }
+                        Button save = (Button)form.Controls.Find("saveSettings", true)[0];
+                        Rectangle bounds = form.RectangleToClient(save.RectangleToScreen(save.ClientRectangle));
+                        Check(form.ClientRectangle.Contains(bounds));
+                        form.Close();
+                    }
+                });
+            }
+            Run("invalid interval blocks saving without modifying settings", delegate
+            {
+                Settings settings = new Settings();
+                using (SettingsForm form = new SettingsForm(settings))
+                {
+                    form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-32000, -32000);
+                    form.Show(); Application.DoEvents();
+                    ComboBox combo = (ComboBox)form.Controls.Find("refreshInterval", true)[0];
+                    int seconds;
+                    foreach (string input in new string[] { "", "abc", "9", "3601", "30.5", "-1" })
+                    { combo.Text = input; Check(!form.TryReadRefreshInterval(out seconds)); }
+                    ((Button)form.Controls.Find("saveSettings", true)[0]).PerformClick();
+                    Check(settings.RefreshSeconds == 30 && form.Visible && form.DialogResult != DialogResult.OK);
+                    form.Close();
+                }
+            });
+            Run("custom interval and cancel preserve existing settings", delegate
+            {
+                Settings settings = new Settings { RefreshSeconds = 45 };
+                using (SettingsForm form = new SettingsForm(settings))
+                {
+                    form.StartPosition = FormStartPosition.Manual; form.Location = new Point(-32000, -32000);
+                    form.Show(); Application.DoEvents();
+                    ComboBox combo = (ComboBox)form.Controls.Find("refreshInterval", true)[0];
+                    int seconds; Check(combo.Text == "45" && form.TryReadRefreshInterval(out seconds) && seconds == 45);
+                    combo.SelectedItem = "120";
+                    ((Button)form.Controls.Find("cancelSettings", true)[0]).PerformClick();
+                    Check(settings.RefreshSeconds == 45);
+                    form.Close();
+                }
+            });
             Console.WriteLine("RESULT: " + passed + " passed, " + failed + " failed");
             return failed == 0 ? 0 : 1;
         }
@@ -199,6 +264,14 @@ internal static class ReaderTests
         {
             string full = Path.GetFullPath(root), parent = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
             if (full.StartsWith(parent + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) && Path.GetFileName(full).StartsWith("fixtures-")) Directory.Delete(full, true);
+        }
+    }
+    private static System.Collections.Generic.IEnumerable<Control> Descendants(Control parent)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            yield return child;
+            foreach (Control nested in Descendants(child)) yield return nested;
         }
     }
     private static void Run(string name, Action test)

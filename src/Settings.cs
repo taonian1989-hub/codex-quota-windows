@@ -66,7 +66,7 @@ namespace CodexQuota
             if (File.Exists(path) && new FileInfo(path).Length > 512 * 1024)
             { string old = path + ".1"; if (File.Exists(old)) File.Delete(old); File.Move(path, old); }
             StringBuilder b = new StringBuilder();
-            b.AppendLine("=== Codex Quota 1.0.0 | " + DateTimeOffset.Now.ToString("o") + " ===");
+            b.AppendLine("=== Codex Quota 1.0.1 | " + DateTimeOffset.Now.ToString("o") + " ===");
             b.AppendLine("Runtime=" + Environment.Version + " OS=" + Environment.OSVersion);
             b.AppendLine("PrivateMB=" + (Process.GetCurrentProcess().PrivateMemorySize64 / 1048576.0).ToString("F1", System.Globalization.CultureInfo.InvariantCulture));
             if (s != null)

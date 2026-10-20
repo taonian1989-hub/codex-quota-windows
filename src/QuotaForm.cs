@@ -111,7 +111,7 @@ namespace CodexQuota
             if (String.IsNullOrEmpty(notice) && Snapshot != null && Snapshot.UnreadableFiles > 0) notice = "有 " + Snapshot.UnreadableFiles + " 个目录或日志无法读取，结果可能不完整。";
             if (String.IsNullOrEmpty(notice) && Snapshot != null && Snapshot.LimitedFiles > 0) notice = "部分日志超过 64 MB 扫描范围，结果可能不完整。";
             Appearance.Text(g, String.IsNullOrEmpty(notice) ? "只读本机日志  ·  无网络请求  ·  无需 API Key" : notice, 25, 656, 10, Muted, false);
-            Appearance.Text(g, "外圈  5 小时     /     月相  每周     ·     v1.0.0", 25, 677, 9, Muted, false);
+            Appearance.Text(g, "外圈  5 小时     /     月相  每周     ·     v1.0.1", 25, 677, 9, Muted, false);
         }
         private void DrawCard(Graphics g, UsageWindow w, UsageWindow weekly, int y, bool primary)
         {
@@ -131,64 +131,6 @@ namespace CodexQuota
             Appearance.FillRound(g, settings.LightTheme ? Color.FromArgb(229, 235, 239) : Color.FromArgb(47, 58, 70), new RectangleF(42, y + 107, 356, 5), 2.5f);
             if (w != null && w.RemainingPercent > 0) Appearance.FillRound(g, color, new RectangleF(42, y + 107, Math.Max(5, (float)(356 * w.RemainingPercent / 100)), 5), 2.5f);
             Appearance.Text(g, Appearance.Countdown(w), 42, y + 127, 10, Muted, false);
-        }
-    }
-
-    public sealed class SettingsForm : Form
-    {
-        private readonly TextBox root;
-        private readonly NumericUpDown interval;
-        private readonly CheckBox number, light, startup;
-        private readonly Settings settings;
-        public SettingsForm(Settings current)
-        {
-            settings = current; Text = "Codex Quota 设置"; StartPosition = FormStartPosition.CenterParent;
-            FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
-            AutoScaleMode = AutoScaleMode.Dpi; ClientSize = new Size(510, 340);
-            Font = new Font("Microsoft YaHei UI", 9);
-            Controls.Add(new Label { Text = "Codex 会话目录（sessions）", Location = new Point(20, 20), AutoSize = true });
-            root = new TextBox { Text = current.ResolvedRoot, Location = new Point(20, 48), Width = 385 };
-            Controls.Add(root);
-            Button browse = new Button { Text = "浏览…", Location = new Point(413, 46), Size = new Size(75, 28) };
-            browse.Click += delegate { using (FolderBrowserDialog dialog = new FolderBrowserDialog { Description = "选择包含 .jsonl 日志的 sessions 文件夹", SelectedPath = root.Text, ShowNewFolderButton = false }) if (dialog.ShowDialog(this) == DialogResult.OK) root.Text = dialog.SelectedPath; }; Controls.Add(browse);
-            Button reset = new Button { Text = "恢复自动检测", Location = new Point(20, 86), Size = new Size(115, 28) };
-            reset.Click += delegate { root.Text = UsageReader.DefaultSessionRoot(); }; Controls.Add(reset);
-            Controls.Add(new Label { Text = "自动刷新间隔（秒）", Location = new Point(20, 136), AutoSize = true });
-            interval = new NumericUpDown { Minimum = 10, Maximum = 3600, Value = current.RefreshSeconds, Location = new Point(190, 132), Width = 80 }; Controls.Add(interval);
-            number = new CheckBox { Text = "同时显示数字托盘图标（5 小时剩余百分比）", Checked = current.ShowNumberIcon, Location = new Point(20, 175), AutoSize = true }; Controls.Add(number);
-            light = new CheckBox { Text = "使用浅色详情面板", Checked = current.LightTheme, Location = new Point(20, 207), AutoSize = true }; Controls.Add(light);
-            startup = new CheckBox { Text = "登录 Windows 时自动启动", Checked = Settings.AutoStart, Location = new Point(20, 239), AutoSize = true }; Controls.Add(startup);
-            Button save = new Button { Text = "保存", Location = new Point(322, 290), Size = new Size(80, 30) };
-            save.Click += Save; Controls.Add(save); AcceptButton = save;
-            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(410, 290), Size = new Size(80, 30) }; Controls.Add(cancel); CancelButton = cancel;
-        }
-        private void Save(object sender, EventArgs e)
-        {
-            try
-            {
-                string path = Environment.ExpandEnvironmentVariables(root.Text.Trim().Trim('"'));
-                if (String.IsNullOrWhiteSpace(path) || !System.IO.Path.IsPathRooted(path) || !System.IO.Directory.Exists(path))
-                { MessageBox.Show(this, "请选择一个存在的 sessions 目录。", "目录无效", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-                string previousRoot = settings.SessionRoot; int previousInterval = settings.RefreshSeconds;
-                bool previousNumber = settings.ShowNumberIcon, previousLight = settings.LightTheme;
-                bool previousStartup = Settings.AutoStart;
-                settings.SessionRoot = System.IO.Path.GetFullPath(path); settings.RefreshSeconds = (int)interval.Value;
-                settings.ShowNumberIcon = number.Checked; settings.LightTheme = light.Checked;
-                try
-                {
-                    if (startup.Checked != previousStartup) Settings.AutoStart = startup.Checked;
-                    settings.Save();
-                }
-                catch
-                {
-                    settings.SessionRoot = previousRoot; settings.RefreshSeconds = previousInterval;
-                    settings.ShowNumberIcon = previousNumber; settings.LightTheme = previousLight;
-                    if (Settings.AutoStart != previousStartup) Settings.AutoStart = previousStartup;
-                    throw;
-                }
-                DialogResult = DialogResult.OK; Close();
-            }
-            catch (Exception ex) { MessageBox.Show(this, "无法保存设置：" + ex.Message, "Codex Quota", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
         }
     }
 }

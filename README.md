@@ -1,4 +1,4 @@
-# Codex Quota for Windows
+﻿# Codex Quota for Windows
 
 Windows 10 / 11 通知区域中的 Codex 额度监视器。**免安装、运行时离线、无需 API Key**。
 
@@ -6,12 +6,12 @@ Windows 10 / 11 通知区域中的 Codex 额度监视器。**免安装、运行�
 
 <p align="center"><img src="docs/panel-dark.png" width="440" alt="Codex Quota 深色详情面板，示例数据"></p>
 
-当前版本：**v1.0.0**。参考 [Phil520/CodexO](https://github.com/Phil520/CodexO) 的功能，为 Windows 用 C# + Windows Forms 重新实现。保留原项目 MIT 声明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目是社区工具。
+当前版本：**v1.0.1**。参考 [Phil520/CodexO](https://github.com/Phil520/CodexO) 的功能，为 Windows 用 C# + Windows Forms 重新实现。保留原项目 MIT 声明，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目是社区工具。
 
 ## 下载与启动
 
 1. 打开 [Releases](https://github.com/taonian1989-hub/codex-quota-windows/releases/latest)。
-2. 下载 **CodexQuota-1.0.0-windows.zip**，解压到任意文件夹。
+2. 下载 **CodexQuota-1.0.1-windows.zip**，解压到任意文件夹。
 3. 双击 **CodexQuota.exe**。不需要管理员权限。
 
 系统要求：Windows 10 / 11，.NET Framework 4.8。程序没有第三方运行依赖；如系统缺少 .NET Framework 4.8，需先安装该运行环境。
@@ -21,8 +21,14 @@ Windows 可能把新图标放进任务栏的「^」隐藏区域，可手动拖�
 发布资产包含 SHA256SUMS.txt，可用以下命令核对下载文件：
 
 ```powershell
-Get-FileHash .\CodexQuota-1.0.0-windows.zip -Algorithm SHA256
+Get-FileHash .\CodexQuota-1.0.1-windows.zip -Algorithm SHA256
 ```
+
+## 设置窗口
+
+刷新间隔支持常用秒数下拉选择，以及 10–3600 秒自定义输入。设置使用 DPI 一致的字体与自适应布局，较小窗口可滚动查看，底部按钮保持可见。
+
+<img src="docs/settings-200.png" width="560" alt="修复后的设置窗口，200% 布局预览">
 
 ## 功能
 
@@ -79,11 +85,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build.ps1 -Test -Outpu
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\package.ps1
 ```
 
-输出 `outputs/CodexQuota-1.0.0-windows.zip` 与 `outputs/SHA256SUMS.txt`。ZIP 内另附程序文件的校验值、使用说明和许可证。
+输出 `outputs/CodexQuota-1.0.1-windows.zip` 与 `outputs/SHA256SUMS.txt`。ZIP 内另附程序文件的校验值、使用说明和许可证。
 
 ## 验收与命令行
 
-30 项测试覆盖跨文件时间戳、时区、空窗口、畸形事件、UTF-8 分块、尾部半行、缓存、截断与删除、并发写入、扫描预算、月相像素和原生按钮。另含 4000 次图标创建与释放的 GDI / USER 句柄检查。详情见 [验证记录](docs/VALIDATION.md)。
+36 项测试覆盖跨文件时间戳、时区、空窗口、畸形事件、UTF-8 分块、尾部半行、缓存、截断与删除、并发写入、扫描预算、月相像素和原生按钮。另含 4000 次图标创建与释放的 GDI / USER 句柄检查。详情见 [验证记录](docs/VALIDATION.md)。
 
 ```powershell
 Start-Process .\CodexQuota.exe -ArgumentList '--inspect --output inspection.json' -Wait

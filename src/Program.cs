@@ -98,7 +98,7 @@ namespace CodexQuota
             if (s == null) return "{\"error\":\"not_loaded\"}";
             return new JavaScriptSerializer().Serialize(new
             {
-                version = "1.0.0", sessions = s.SessionRoot, loaded_at = s.LoadedAt.ToString("o"),
+                version = "1.0.1", sessions = s.SessionRoot, loaded_at = s.LoadedAt.ToString("o"),
                 recorded_at = s.RecordedAt.HasValue ? s.RecordedAt.Value.ToString("o") : null,
                 has_data = s.HasData, error = s.Error, files = s.FileCount, read_files = s.ReadCount,
                 unreadable_files = s.UnreadableFiles, scan_limited_files = s.LimitedFiles,
@@ -260,6 +260,7 @@ namespace CodexQuota
         public static void Render(string directory, UsageSnapshot snapshot)
         {
             Directory.CreateDirectory(directory);
+            RenderSettings(directory);
             MakeApplicationIcon(Path.Combine(directory, "app.ico"));
             RenderPanel(Path.Combine(directory, "panel-dark.png"), snapshot, false);
             RenderPanel(Path.Combine(directory, "panel-light.png"), snapshot, true);
@@ -282,6 +283,23 @@ namespace CodexQuota
                     using (Icon icon = Appearance.MakeIcon(s, true, false, 32)) g.DrawIcon(icon, 26 + i * 78, 132);
                 }
                 icons.Save(Path.Combine(directory, "icons.png"), ImageFormat.Png);
+            }
+        }
+        private static void RenderSettings(string directory)
+        {
+            foreach (int percent in new int[] { 100, 125, 150, 200 })
+            {
+                using (SettingsForm form = new SettingsForm(new Settings { SessionRoot = @"C:\Codex\sessions" }, percent / 100f))
+                {
+                    form.StartPosition = FormStartPosition.Manual;
+                    form.Location = new Point(-32000, -32000); form.Show(); Application.DoEvents();
+                    using (Bitmap image = new Bitmap(form.Width, form.Height))
+                    {
+                        form.DrawToBitmap(image, new Rectangle(Point.Empty, image.Size));
+                        image.Save(Path.Combine(directory, "settings-" + percent + ".png"), ImageFormat.Png);
+                    }
+                    form.Close();
+                }
             }
         }
         private static void RenderPanel(string path, UsageSnapshot snapshot, bool light)

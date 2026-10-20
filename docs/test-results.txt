@@ -29,4 +29,10 @@ PASS moon boundaries and lit area are monotonic
   Native handles delta: GDI=1 USER=0
 PASS 4000 icon lifecycles do not leak native handles
 PASS native controls dispatch refresh, settings, folder and hide
-RESULT: 30 passed, 0 failed
+PASS settings layout fits and interval is selectable at 100%
+PASS settings layout fits and interval is selectable at 125%
+PASS settings layout fits and interval is selectable at 150%
+PASS settings layout fits and interval is selectable at 200%
+PASS invalid interval blocks saving without modifying settings
+PASS custom interval and cancel preserve existing settings
+RESULT: 36 passed, 0 failed
